@@ -1,0 +1,1209 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Network Sonifier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500;1,600&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: listening console. A wide live score on the left, a control rack on the right, the packet log under the score, and the hotlist and mapping underneath. */
+/* Look: a printed score. Ink on paper, with red kept for the notes that do not belong. */
+:root{
+  --bg:#F6F4EF; --panel:#FCFBF8; --ink:#17161A; --muted:#6B6861; --line:#D8D4CB;
+  --accent:#17161A; --accent-ink:#FCFBF8;
+  --calm:#17161A; --alarm:#C4311C;
+  --calm-soft:rgba(23,22,26,.06); --alarm-soft:rgba(196,49,28,.10);
+  --display:'Cormorant Garamond',Georgia,'Times New Roman',serif;
+  --body:'Instrument Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+  color-scheme:light;
+}
+/* Light is the default whatever the system theme; data-theme="dark" on the root element switches to the dark palette. */
+:root[data-theme="dark"]{
+  --bg:#0F0F11; --panel:#161618; --ink:#ECE9E2; --muted:#8F8C85; --line:#2C2C31;
+  --accent:#ECE9E2; --accent-ink:#0F0F11;
+  --calm:#ECE9E2; --alarm:#FF6A4D;
+  --calm-soft:rgba(236,233,226,.08); --alarm-soft:rgba(255,106,77,.14);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--body);margin:0}
+.app{max-width:1340px;margin:0 auto;padding-inline:clamp(16px,3vw,36px);padding-block:24px 56px;display:grid;gap:18px}
+
+.top{display:flex;flex-wrap:wrap;gap:16px 32px;align-items:flex-end;justify-content:space-between}
+.eyebrow{font:500 11px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:0 0 6px}
+.brand h1{font:600 clamp(40px,5.6vw,64px)/.95 var(--display);letter-spacing:-.01em;margin:0;text-wrap:balance}
+.brand p.lede{margin:10px 0 0;color:var(--muted);max-width:64ch}
+/* The opening bar: a five-line staff with one note out of key. */
+.staff{height:41px;color:var(--ink);background:
+  linear-gradient(var(--line),var(--line)) 0 4px/100% 1px no-repeat,
+  linear-gradient(var(--line),var(--line)) 0 12px/100% 1px no-repeat,
+  linear-gradient(var(--line),var(--line)) 0 20px/100% 1px no-repeat,
+  linear-gradient(var(--line),var(--line)) 0 28px/100% 1px no-repeat,
+  linear-gradient(var(--line),var(--line)) 0 36px/100% 1px no-repeat}
+.staff svg{display:block;height:41px;width:auto;overflow:visible}
+.transport{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+button{font:inherit;color:inherit;cursor:pointer}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:4px;padding:9px 16px;font-weight:500}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.primary:hover{opacity:.86}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.vol{display:flex;gap:9px;align-items:center;color:var(--muted)}
+.vol i{font:italic 600 19px/1 var(--display)}
+input[type=range]{accent-color:var(--accent);width:100%}
+.vol input{width:110px}
+
+.main{display:grid;grid-template-columns:minmax(0,1fr) 380px;grid-template-rows:auto 1fr;gap:18px;align-items:start}
+.main > .side{grid-column:2;grid-row:1 / span 2}
+.main > .log{align-self:stretch;align-content:start}
+@media (max-width:1000px){.main{grid-template-columns:minmax(0,1fr)}.main > .side{grid-column:auto;grid-row:auto}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:4px}
+
+.stage{position:relative;padding:14px 16px 16px;display:grid;gap:12px;min-width:0}
+.readouts{display:flex;flex-wrap:wrap;gap:10px 28px;align-items:end}
+.readout{display:grid}
+.k{font:500 11px/1.4 var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.readout .v{font:500 19px/1.3 var(--mono);font-variant-numeric:tabular-nums}
+.readout .v small{font-size:12px;color:var(--muted);font-weight:400}
+.readout .v em{font:italic 500 19px/1 var(--display);color:var(--muted);margin-left:6px}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:4px 11px;border-radius:999px;font:500 12.5px/1.4 var(--mono);margin-left:auto}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.pill.calm{background:var(--calm-soft);color:var(--calm)}
+.pill.alarm{background:var(--alarm-soft);color:var(--alarm)}
+.pill.neutral{background:var(--bg);color:var(--muted)}
+canvas{display:block;width:100%}
+#roll{height:clamp(270px,34vw,390px);border-radius:2px;background:var(--bg)}
+#rate{height:78px}
+.pan{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,1fr) auto;gap:10px;align-items:center;font:12px var(--mono);color:var(--muted)}
+.pan .bar{height:8px;background:var(--bg);display:flex;overflow:hidden}
+.pan .bar.l{justify-content:flex-end;border-radius:4px 0 0 4px}
+.pan .bar.r{border-radius:0 4px 4px 0;border-left:1px solid var(--line)}
+.pan .bar i{display:block;height:100%;background:var(--accent);width:0}
+
+.side{min-width:0;overflow:hidden}
+.tabpanel{padding:16px;display:grid;gap:20px}
+.group{display:grid;gap:10px}
+.group > h2{font:600 23px/1.15 var(--display);margin:0}
+.hint{margin:0;color:var(--muted);font-size:13.5px}
+
+.attacks{display:grid;gap:8px}
+.attack{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:4px;background:var(--bg)}
+.attack:hover:not(:disabled){border-color:var(--muted)}
+.attack b{font-weight:600}
+.attack .rate{font:12px/1.6 var(--mono);color:var(--muted)}
+.attack .cue{grid-column:1/-1;font-size:13px;color:var(--muted);line-height:1.4}
+.attack .cue b{color:var(--ink)}
+.attack[aria-pressed="true"]{border-color:var(--alarm);background:var(--alarm-soft)}
+.attack[aria-pressed="true"] .rate{color:var(--alarm)}
+.attack:disabled{opacity:.5;cursor:not-allowed}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+.field{display:grid;gap:3px}
+.field label{display:flex;justify-content:space-between;gap:10px;font-size:13.5px;font-weight:500}
+.field output{font:12px var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.check{display:flex;gap:9px;align-items:flex-start;font-size:13.5px}
+.check input{margin-top:3px;accent-color:var(--accent)}
+
+/* Lower strip */
+.lower{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:700px){.lower{grid-template-columns:minmax(0,1fr)}}
+.sec{padding:14px 16px 16px;display:grid;gap:10px;min-width:0;position:relative}
+.sec-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.sec-h h2{font:600 23px/1.15 var(--display);margin:0}
+.sec-h span{font:12px var(--mono);color:var(--muted)}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font:12.5px/1.4 var(--mono);font-variant-numeric:tabular-nums}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.odd{color:var(--alarm);font-weight:500}
+
+.hot{display:grid;gap:12px}
+.hot-ips{display:grid;grid-template-columns:minmax(0,1fr) auto auto;grid-auto-rows:max-content;gap:2px 12px;font:12.5px/1.6 var(--mono);max-height:236px;overflow:auto;padding-right:4px}
+.hot-ips span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hot-ips .h{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.hot-ips .n{color:var(--calm)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font:12px/1 var(--mono);padding:6px 8px;border-radius:3px;background:var(--calm-soft);color:var(--calm)}
+.chip span{color:var(--muted);margin-left:4px}
+
+.map{margin:0;display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 14px;font-size:13.5px}
+.map dt{font:500 11px/1.9 var(--mono);text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.map dd{margin:0}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:5px}
+.sw.c{background:var(--calm)}.sw.d{background:var(--alarm)}
+
+/* Resolved flaws */
+.fixes{padding:14px 16px 16px;display:grid;gap:12px}
+.fixgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(225px,1fr));gap:12px}
+.fix{display:grid;gap:8px;align-content:start;min-width:0;padding:12px;border-radius:4px;background:var(--bg)}
+.fix.on{box-shadow:inset 0 0 0 1px var(--accent)}
+.fix h3{font:600 21px/1.15 var(--display);margin:0}
+.fix .k{margin:0}
+.btn[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+.lvls{display:grid;grid-template-columns:auto minmax(0,1fr);gap:5px 8px;align-items:center;font:11px/1.4 var(--mono);color:var(--muted)}
+.lvl{position:relative;height:6px;border-radius:3px;background:var(--panel);overflow:hidden}
+.lvl i{display:block;height:100%;width:0;background:var(--accent)}
+.lvl i.alert{background:var(--alarm)}
+.lvl.mark::after{content:"";position:absolute;left:40%;top:0;bottom:0;width:1px;background:var(--muted)}
+.lvl-note{font:11px/1.4 var(--mono);color:var(--muted)}
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <p class="eyebrow">Sonification · network anomaly detection</p>
+      <h1>Network Sonifier</h1>
+      <p class="lede">A working model of the Oxford study by Axon, Happa, Goldsmith &amp; Creese. Synthetic traffic at about 4,500 packets per second is sampled, and every sampled packet header is played as notes. Inject an attack and listen for it, open a Wireshark capture, or listen to this computer's own traffic live.</p>
+    </div>
+    <div class="transport">
+      <button class="btn primary" id="soundBtn" type="button">Start listening</button>
+      <label class="vol" for="vol" title="Volume"><i>pp</i><input id="vol" type="range" min="0" max="1" step="0.01" value="0.7" aria-label="Volume"><i>ff</i></label>
+    </div>
+  </header>
+
+  <div class="staff" aria-hidden="true">
+    <svg viewBox="0 0 250 41" fill="currentColor" stroke="currentColor" stroke-width="1.3">
+      <g><ellipse cx="34" cy="28.5" rx="5.4" ry="3.9" transform="rotate(-22 34 28.5)" stroke="none"/><path d="M39 27.5V4.5"/></g>
+      <g><ellipse cx="62" cy="20.5" rx="5.4" ry="3.9" transform="rotate(-22 62 20.5)" stroke="none"/><path d="M67 19.5V-3.5"/></g>
+      <g><ellipse cx="90" cy="24.5" rx="5.4" ry="3.9" transform="rotate(-22 90 24.5)" stroke="none"/><path d="M95 23.5V0.5"/></g>
+      <g><ellipse cx="118" cy="12.5" rx="5.4" ry="3.9" transform="rotate(-22 118 12.5)" stroke="none"/><path d="M113 13.5V36.5"/></g>
+      <g style="fill:var(--alarm);stroke:var(--alarm)"><text x="131" y="22" font-size="16" stroke="none" font-family="Georgia,serif">♯</text><ellipse cx="150" cy="16.5" rx="5.4" ry="3.9" transform="rotate(-22 150 16.5)" stroke="none"/><path d="M145 17.5V40.5"/></g>
+      <g><ellipse cx="178" cy="20.5" rx="5.4" ry="3.9" transform="rotate(-22 178 20.5)" stroke="none"/><path d="M183 19.5V-3.5"/></g>
+      <g><ellipse cx="206" cy="28.5" rx="5.4" ry="3.9" transform="rotate(-22 206 28.5)" stroke="none"/><path d="M211 27.5V4.5"/></g>
+      <path d="M238 4.5V36.5" stroke-width="1"/>
+    </svg>
+  </div>
+
+  <div class="main">
+    <section class="panel stage" aria-label="Live sonification">
+      <div class="readouts">
+        <div class="readout"><span class="k">Packet rate</span><span class="v" id="ro-rate">4,500 <small>pps</small></span></div>
+        <div class="readout"><span class="k">Tempo</span><span class="v" id="ro-tempo">7.5 <small>notes/s</small><em>Andante</em></span></div>
+        <div class="readout"><span class="k">Sampled</span><span class="v" id="ro-count">0</span></div>
+        <span class="pill calm" id="ro-state">Normal traffic</span>
+      </div>
+      <canvas id="roll" aria-label="Scrolling score of sampled packets: port notes on top, destination IP in the middle, source IP at the bottom"></canvas>
+      <canvas id="rate" aria-label="Packet rate over the last 30 seconds"></canvas>
+      <div class="pan" aria-hidden="true">
+        <span>Incoming · L</span>
+        <div class="bar l"><i id="panL"></i></div>
+        <div class="bar r"><i id="panR"></i></div>
+        <span>R · Outgoing</span>
+      </div>
+    </section>
+
+    <aside class="panel side">
+      <div class="tabpanel" id="panel-lab">
+        <div class="group">
+          <h2>Traffic source</h2>
+          <p class="hint" id="capHint">Simulated traffic is playing. Open a Wireshark capture (.pcapng or .pcap) to hear recorded packets, or run live_capture.py to hear this computer's traffic as it happens. Nothing is uploaded.</p>
+          <div class="row">
+            <button class="btn" id="capOpen" type="button">Open Wireshark capture…</button>
+            <button class="btn" id="liveOpen" type="button">Live traffic</button>
+            <button class="btn" id="capRestart" type="button" hidden>Restart</button>
+            <button class="btn" id="capClose" type="button" hidden>Back to simulated</button>
+            <input id="capFile" type="file" accept=".pcapng,.pcap,.cap" hidden>
+          </div>
+          <div class="field" id="capPos" hidden>
+            <label for="capSeek">Position <output id="o-cap"></output></label>
+            <input id="capSeek" type="range" min="0" max="1" step="0.1" value="0">
+          </div>
+        </div>
+
+        <div class="group">
+          <h2>Inject an attack</h2>
+          <p class="hint">Start listening first, learn the normal sound for a few seconds, then switch an attack on. The fixes are switched on under Resolved flaws, further down.</p>
+          <div class="attacks" id="attacks">
+            <button class="attack" type="button" data-attack="ddos" aria-pressed="false"><b>DDoS · SYN flood</b><span class="rate">+9,000 pps</span><span class="cue">Dense, short, dissonant low clarinet notes on the left, from ever-changing sources.</span><span class="cue"><b>With fixes on:</b> a pounding drum.</span></button>
+            <button class="attack" type="button" data-attack="scan" aria-pressed="false"><b>Port scan</b><span class="rate">+2,600 pps</span><span class="cue">High notes that keep jumping to dissonant pitches as unusual destination ports are probed.</span><span class="cue"><b>With fixes on:</b> rapid knocking, one knock per probed port.</span></button>
+            <button class="attack" type="button" data-attack="exfil" aria-pressed="false"><b>Data exfiltration</b><span class="rate">+1,600 pps</span><span class="cue">Long FTP piano notes panned right, with a dissonant mid note for the unknown destination.</span><span class="cue"><b>With fixes on:</b> a car horn honking on the right.</span></button>
+            <button class="attack" type="button" data-attack="loss" aria-pressed="false"><b>Connectivity loss</b><span class="rate">→ 0 pps</span><span class="cue">The whole network fades out to silence.</span><span class="cue"><b>With fixes on:</b> the heartbeat stops and a flatline tone sounds.</span></button>
+            <button class="attack" type="button" data-attack="combined" aria-pressed="false"><b>Combined attack</b><span class="rate">DDoS + exfil</span><span class="cue">A flood on the left hides a data theft on the right.</span><span class="cue"><b>With fixes on:</b> drum and car horn together.</span></button>
+          </div>
+          <div class="row"><button class="btn" id="stopAll" type="button">Stop all attacks</button></div>
+        </div>
+
+        <div class="group">
+          <h2>Model settings</h2>
+          <div class="field">
+            <label for="sampling">Packet sampling <output id="o-sampling">1 in 600</output></label>
+            <input id="sampling" type="range" min="200" max="2000" step="50" value="600">
+          </div>
+          <div class="field">
+            <label for="kip">IP hotlist size <output id="o-kip">22 addresses</output></label>
+            <input id="kip" type="range" min="6" max="26" step="1" value="22">
+          </div>
+          <div class="field">
+            <label for="noise">Rare hosts in normal traffic <output id="o-noise">1.0%</output></label>
+            <input id="noise" type="range" min="0" max="0.05" step="0.0025" value="0.01">
+          </div>
+          <label class="check" for="drone"><input id="drone" type="checkbox" checked> <span>Background drone on C. It gives dissonant notes something to clash with, and fades when traffic stops.</span></label>
+        </div>
+      </div>
+    </aside>
+
+    <section class="panel sec log" id="logSec">
+      <div class="sec-h"><h2>Sampled packets</h2><span>most recent first · unusual values in red</span></div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Time</th><th>Proto</th><th>Dir</th><th>Source</th><th>Destination</th><th>Port</th><th>Bytes</th><th>Notes</th></tr></thead>
+          <tbody id="logBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel fixes" id="fixes">
+    <div class="sec-h"><h2>Resolved flaws</h2><span>five weaknesses of the paper's design · nothing above changes until you switch a fix on</span></div>
+    <div class="row">
+      <button class="btn" id="fixAll" type="button" aria-pressed="false">Switch on all five fixes</button>
+      <span class="hint" id="fixState">The paper's original design is playing.</span>
+    </div>
+    <div class="fixgrid">
+      <article class="fix">
+        <p class="k">Issue in the paper</p>
+        <h3>DDoS and port scan confused</h3>
+        <p class="hint">Both are heard as low dissonant notes, and listeners named six port scans as DDoS.</p>
+        <label class="check" for="fx-timbre"><input id="fx-timbre" type="checkbox" data-fix="timbre"> <span><b>Fix: separate timbres.</b> A flood of connection requests from many new sources is a pounding drum. A port scan is rapid knocking, one knock for each new unusual port in place of its high note.</span></label>
+        <div class="lvls"><span>Flood</span><div class="lvl"><i id="lv-ddos"></i></div><span>Scan</span><div class="lvl"><i id="lv-scan"></i></div></div>
+      </article>
+      <article class="fix">
+        <p class="k">Issue in the paper</p>
+        <h3>FTP false positives</h3>
+        <p class="hint">Every FTP packet plays the same piano note, so an ordinary file transfer can pass for an exfiltration.</p>
+        <label class="check" for="fx-ftp"><input id="fx-ftp" type="checkbox" data-fix="ftp"> <span><b>Fix: volume follows flow density.</b> A lone FTP packet plays softly. Notes grow louder as packets pile up on one source-to-destination flow, and once a flow stays dense a car horn honks.</span></label>
+        <div class="lvls"><span>Busiest FTP flow</span><div class="lvl"><i id="lv-ftp"></i></div></div>
+      </article>
+      <article class="fix">
+        <p class="k">Issue in the paper</p>
+        <h3>Connectivity loss is silence</h3>
+        <p class="hint">The sound only thins out. It was the slowest attack to detect, at 6.4 s, and some listeners thought the test had ended.</p>
+        <label class="check" for="fx-heart"><input id="fx-heart" type="checkbox" data-fix="heart"> <span><b>Fix: heartbeat carrier tone.</b> A soft heartbeat plays all the time. When traffic collapses the heartbeat stops and a flatline tone sounds, so an outage is something you hear.</span></label>
+        <div class="lvls"><span>Link</span><div class="lvl"><i id="lv-link"></i></div></div>
+      </article>
+      <article class="fix">
+        <p class="k">Issue in the paper</p>
+        <h3>Static hotlists</h3>
+        <p class="hint">The hotlist is fixed after the first 30 s, so a harmless change in normal traffic sounds dissonant from then on.</p>
+        <label class="check" for="fx-ema"><input id="fx-ema" type="checkbox" data-fix="ema"> <span><b>Fix: moving-average hotlists.</b> Counts follow a 45 s exponential moving average. A value seen steadily for 30 s is learned as normal, with a rising chime, and one that disappears is forgotten. An attack held that long is learned too.</span></label>
+        <div class="row"><button class="btn" id="shiftBtn" type="button" aria-pressed="false">Shift normal traffic</button></div>
+        <span class="lvl-note" id="lv-ema"></span>
+      </article>
+      <article class="fix">
+        <p class="k">Issue in the paper</p>
+        <h3>Auditory fatigue</h3>
+        <p class="hint">Every packet plays at full level all the time. The paper leaves listener fatigue untested.</p>
+        <label class="check" for="fx-calm"><input id="fx-calm" type="checkbox" data-fix="calm"> <span><b>Fix: adaptive filtering and muting.</b> Normal traffic plays quietly through a low-pass filter. When the anomaly score passes its threshold a bell rings, the filter opens and the level rises.</span></label>
+        <div class="lvls"><span>Anomaly score</span><div class="lvl mark"><i id="lv-any"></i></div></div>
+        <span class="lvl-note" id="lv-calm"></span>
+      </article>
+    </div>
+  </section>
+
+  <div class="lower">
+    <section class="panel sec">
+      <div class="sec-h"><h2>Hotlist</h2><span id="hotMeta">learned from baseline</span></div>
+      <div class="hot">
+        <div class="hot-ips" id="hotIps"></div>
+        <div class="group" style="gap:6px">
+          <span class="k">Ports</span>
+          <div class="chips" id="hotPorts"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel sec">
+      <div class="sec-h"><h2>Sound mapping</h2><span>from the paper</span></div>
+      <dl class="map">
+        <dt>Rate</dt><dd>Packet rate sets the tempo: one sampled header, one chord</dd>
+        <dt>Size</dt><dd>Note length, from 40 B (staccato) to 1,500 B (held)</dd>
+        <dt>Direction</dt><dd>Incoming pans left, outgoing pans right</dd>
+        <dt>Pitch</dt><dd>Source IP low (C2–B3), destination IP mid (C4–C5), port high (C6–C7)</dd>
+        <dt>Timbre</dt><dd>HTTP strings, TCP clarinet, FTP piano, anything else strings</dd>
+        <dt>Harmony</dt><dd><span class="sw c"></span>Hotlisted value: C major pentatonic<br><span class="sw d"></span>Unusual value: C♯, F♯ or B against the C drone</dd>
+      </dl>
+    </section>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const rnd = Math.random;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const fmtInt = n => Math.round(n).toLocaleString('en-US');
+const fmtClock = s => { s = Math.max(0, s); return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); };
+const simNow = () => performance.now() / 1000;
+const T0 = simNow();
+
+/* ---------------- Network model ---------------- */
+const INTERNAL = [10,12,15,23,31,44,52,67,71,88,103,120].map(n => '10.0.1.' + n);
+const EXTERNAL = ['142.250.180.14','151.101.1.69','104.16.132.229','13.107.42.14','52.84.150.39','140.82.121.4','17.253.144.10','31.13.72.36','185.199.108.153','23.215.0.136','172.217.16.195','34.120.177.193','93.184.215.14','8.8.8.8'];
+const zipf = (n, s) => Array.from({length: n}, (_, i) => 1 / Math.pow(i + 1, s));
+function picker(items, weights) {
+  const cum = []; let t = 0;
+  for (const w of weights) { t += w; cum.push(t); }
+  return () => { const r = rnd() * t; let i = 0; while (cum[i] < r) i++; return items[i]; };
+}
+const pickInt = picker(INTERNAL, zipf(INTERNAL.length, 0.9));
+const pickExt = picker(EXTERNAL, zipf(EXTERNAL.length, 1.15));
+const pickPort = picker([443, 80, 22, 993, 25, 21, 20], [.46, .22, .08, .06, .05, .07, .06]);
+const protoOf = p => (p === 80 || p === 443) ? 'HTTP' : (p === 20 || p === 21) ? 'FTP' : 'TCP';
+const FIRST_OCTETS = [5,37,41,46,61,77,89,91,94,109,112,123,176,178,193,195,212,217];
+const randomIP = () => `${FIRST_OCTETS[rnd() * FIRST_OCTETS.length | 0]}.${rnd() * 256 | 0}.${rnd() * 256 | 0}.${1 + (rnd() * 254 | 0)}`;
+
+const VICTIM = '10.0.1.10', SCAN_TARGET = '10.0.1.12', SCANNER = '45.155.205.33';
+const EXFIL_SRC = '10.0.1.23', EXFIL_DST = '203.0.113.66';
+const ATTACK_RATE = {ddos: 9000, scan: 2600, exfil: 1600};
+const NAMES = {ddos: 'DDoS', scan: 'Port scan', exfil: 'Exfiltration', loss: 'Connectivity loss'};
+
+const cfg = {sampling: 600, kIP: 22, kPort: 7, noise: 0.01, drone: true, volume: 0.7};
+// A harmless change in normal traffic: three busy servers move to new addresses. It shows a static hotlist going stale.
+const SHIFT = new Map([[EXTERNAL[1], '20.190.151.7'], [EXTERNAL[2], '99.84.238.101'], [EXTERNAL[3], '157.240.22.35']]);
+let shifted = false;
+
+function normalPacket(noise) {
+  const port = pickPort();
+  const proto = protoOf(port);
+  let dir = rnd() < 0.56 ? 'in' : 'out';
+  if (port === 20) dir = rnd() < 0.85 ? 'in' : 'out';
+  const host = pickInt();
+  let ext = rnd() < noise ? randomIP() : pickExt();
+  if (shifted) ext = SHIFT.get(ext) || ext;
+  let size;
+  if (proto === 'HTTP') size = dir === 'in' ? (rnd() < 0.6 ? 1500 : 200 + rnd() * 1100) : 60 + rnd() * 380;
+  else if (port === 20) size = 700 + rnd() * 800;
+  else if (port === 21) size = 60 + rnd() * 120;
+  else size = 70 + rnd() * 480;
+  const flags = dir === 'in' ? 'ACK' : 'PSH,ACK';
+  return {src: dir === 'in' ? ext : host, dst: dir === 'in' ? host : ext, port, proto, size: Math.round(size), dir, flags, origin: 'normal'};
+}
+let scanPort = 1;
+function attackPacket(kind) {
+  if (kind === 'ddos') return {src: randomIP(), dst: VICTIM, port: 80, proto: 'TCP', size: 40 + (rnd() * 20 | 0), dir: 'in', flags: 'SYN', origin: 'ddos'};
+  if (kind === 'scan') {
+    scanPort = scanPort >= 1024 ? 1 : scanPort + 1 + (rnd() < 0.3 ? (rnd() * 4 | 0) : 0);
+    return {src: SCANNER, dst: SCAN_TARGET, port: scanPort, proto: 'TCP', size: 44, dir: 'in', flags: 'SYN', origin: 'scan'};
+  }
+  return {src: EXFIL_SRC, dst: EXFIL_DST, port: 20, proto: 'FTP', size: 1380 + (rnd() * 120 | 0), dir: 'out', flags: 'PSH,ACK', origin: 'exfil'};
+}
+
+/* ---------------- Hotlist ---------------- */
+const BASELINE_PACKETS = 135000; // 30 s at 4,500 pps
+const hot = {ipCounts: new Map(), portCounts: new Map(), ips: new Map(), ports: new Map()};
+function learnBaseline(packets) {   // a capture's baseline packets, or simulated traffic when omitted
+  hot.ipCounts.clear(); hot.portCounts.clear();
+  const inc = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  hot.n = packets ? packets.length : BASELINE_PACKETS;
+  for (let i = 0; i < hot.n; i++) {
+    const p = packets ? packets[i] : normalPacket(cfg.noise);
+    inc(hot.ipCounts, p.src); inc(hot.ipCounts, p.dst); inc(hot.portCounts, p.port);
+  }
+}
+function buildHotlist() {
+  const top = (m, k) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, k);
+  hot.ips = new Map(top(hot.ipCounts, cfg.kIP).map(([ip], i) => [ip, i]));
+  hot.ports = new Map(top(hot.portCounts, cfg.kPort).map(([p], i) => [p, i]));
+  if (fix.ema) seedEma();
+  renderHotlist();
+}
+
+/* ---------------- Pitch mapping ---------------- */
+const NOTE_NAMES = ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
+const noteName = m => NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
+const CONS_STEPS = [0, 2, 4, 7, 9];   // C major pentatonic
+const DIS_STEPS = [1, 6, 11];         // minor 2nd, tritone, major 7th against C
+const REG = {src: {base: 36, oct: 2}, dst: {base: 60, oct: 1}, port: {base: 84, oct: 1}};
+const regNotes = (r, steps, topC) => {
+  const out = [];
+  for (let o = 0; o < r.oct; o++) for (const s of steps) out.push(r.base + 12 * o + s);
+  if (topC) out.push(r.base + 12 * r.oct);
+  return out;
+};
+const CONS = {}, DIS = {};
+for (const f in REG) { CONS[f] = regNotes(REG[f], CONS_STEPS, f !== 'src'); DIS[f] = regNotes(REG[f], DIS_STEPS, false); }
+const BAND = {port: [83, 98], dst: [59, 74], src: [35, 61]};
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function noteFor(field, value) {
+  const rank = (field === 'port' ? hot.ports : hot.ips).get(value);
+  if (rank !== undefined) return {midi: CONS[field][rank % CONS[field].length], cons: true};
+  return {midi: DIS[field][hash(String(value)) % DIS[field].length], cons: false};
+}
+const durFor = size => 0.07 + 0.5 * Math.pow(clamp((size - 40) / 1460, 0, 1), 0.8);
+const INST = {HTTP: 'strings', TCP: 'clarinet', FTP: 'piano'};
+const VEL = {src: 0.11, dst: 0.09, port: 0.065};
+
+/* ---------------- Audio ---------------- */
+let ac = null, master = null, droneGain = null, soundOn = false;
+function initAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  ac = new AC();
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -20; comp.ratio.value = 4; comp.attack.value = 0.005; comp.release.value = 0.2;
+  master = ac.createGain(); master.gain.value = cfg.volume;
+  master.connect(comp).connect(ac.destination);
+  droneGain = ac.createGain(); droneGain.gain.value = 0;
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420;
+  droneGain.connect(lp).connect(master);
+  [[65.41, 'sine', 1], [98.0, 'sine', 0.55], [130.81, 'triangle', 0.35]].forEach(([f, type, g]) => {
+    const o = ac.createOscillator(); o.type = type; o.frequency.value = f;
+    const gg = ac.createGain(); gg.gain.value = g;
+    o.connect(gg).connect(droneGain); o.start();
+  });
+  initFixAudio();
+}
+function voice(midi, t, dur, pan, inst, vel) {
+  const f = 440 * Math.pow(2, (midi - 69) / 12);
+  const g = ac.createGain();
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+  let out = g;
+  if (ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = pan; g.connect(p); out = p; }
+  lp.connect(g); out.connect(fix.calm ? calmLP : master);
+  const peak = vel * (midi > 80 ? 0.7 : 1);
+  const oscs = [];
+  const osc = (type, freq, gain) => {
+    const o = ac.createOscillator(); o.type = type; o.frequency.value = freq;
+    if (gain !== undefined) { const og = ac.createGain(); og.gain.value = gain; o.connect(og).connect(lp); } else o.connect(lp);
+    oscs.push(o); return o;
+  };
+  let end;
+  g.gain.setValueAtTime(0, t);
+  if (inst === 'strings') {
+    osc('sawtooth', f).detune.value = -7; osc('sawtooth', f).detune.value = 7;
+    lp.frequency.value = Math.min(5200, f * 4.5); lp.Q.value = 0.6;
+    const a = peak * 0.45;
+    g.gain.linearRampToValueAtTime(a, t + 0.045);
+    g.gain.setValueAtTime(a, t + Math.max(0.05, dur));
+    end = t + dur + 0.18; g.gain.linearRampToValueAtTime(0, end);
+  } else if (inst === 'clarinet') {
+    osc('square', f);
+    lp.frequency.value = Math.min(4200, f * 3.2); lp.Q.value = 1.4;
+    const a = peak * 0.5;
+    g.gain.linearRampToValueAtTime(a, t + 0.018);
+    g.gain.setValueAtTime(a, t + Math.max(0.03, dur));
+    end = t + dur + 0.06; g.gain.linearRampToValueAtTime(0, end);
+  } else {
+    osc('triangle', f); osc('sine', f * 2, 0.3); osc('sine', f * 3, 0.08);
+    lp.frequency.value = Math.min(7000, f * 6);
+    g.gain.linearRampToValueAtTime(peak * 1.1, t + 0.005);
+    end = t + dur + 0.35; g.gain.exponentialRampToValueAtTime(0.0006, end);
+  }
+  oscs.forEach(o => { o.start(t); o.stop(end + 0.03); });
+  oscs[0].onended = () => { try { out.disconnect(); } catch (e) {} };
+}
+function setSound(on) {
+  if (on) {
+    if (!ac) initAudio();
+    if (ac.state === 'suspended') ac.resume();
+    soundOn = true;
+  } else soundOn = false;
+  $('#soundBtn').textContent = soundOn ? 'Mute' : 'Start listening';
+  $('#soundBtn').classList.toggle('primary', !soundOn);
+}
+
+/* ---------------- Engine ---------------- */
+const active = {ddos: false, scan: false, exfil: false, loss: false};
+const level = {ddos: 0, scan: 0, exfil: 0, loss: 0};
+const annotations = [];
+const pending = [], events = [], logRows = [], rateHist = [];
+let scheduledUntil = simNow(), lastTick = simNow(), sampledCount = 0;
+let curTotal = 4500, curLambda = 7.5;
+let cap = null;   // the open Wireshark capture, or null while traffic is simulated
+const meter = {l: 0, r: 0};
+
+function setActive(type, on) {
+  if (active[type] === on) return;
+  active[type] = on;
+  const now = simNow();
+  if (on) annotations.push({type, start: now, end: null});
+  else { for (let i = annotations.length - 1; i >= 0; i--) if (annotations[i].type === type && annotations[i].end === null) { annotations[i].end = now; break; } }
+  syncAttackButtons();
+}
+function baseRate(t) { return 4500 * (1 + 0.045 * Math.sin(t / 7.3) + 0.025 * Math.sin(t / 2.1)) + (rnd() - 0.5) * 90; }
+
+function emit(te, parts, partsSum) {
+  let r = rnd() * partsSum, kind = 'normal';
+  for (const [k, v] of parts) { if (r < v) { kind = k; break; } r -= v; }
+  play(kind === 'normal' ? normalPacket(cfg.noise) : attackPacket(kind), te);
+}
+function play(p, te) {
+  p.t = te;
+  p.dur = durFor(p.size);
+  p.inst = INST[p.proto] || 'strings';   // any other protocol plays on strings, as in the paper
+  p.pan = p.dir === 'in' ? -0.75 : 0.75;
+  p.notes = [['src', p.src], ['dst', p.dst], ['port', p.port]].map(([field, v]) => Object.assign({field}, noteFor(field, v)));
+  const ftpGain = watch(p, te);
+  if (soundOn && ac) {
+    const at = ac.currentTime + (te - simNow()) + 0.03;
+    for (const n of p.notes) {
+      if (fix.timbre && n.field === 'port' && p.newPort) knock(at, p.pan);
+      else voice(n.midi, at, p.dur, p.pan, p.inst, VEL[n.field] * (fix.ftp ? ftpGain : 1));
+    }
+  }
+  pending.push(p);
+}
+
+function tick() {
+  const now = simNow();
+  const dt = Math.min(0.5, now - lastTick); lastTick = now;
+  if (scheduledUntil < now) scheduledUntil = now;
+  for (const k in level) {
+    const tgt = active[k] ? 1 : 0;
+    const speed = k === 'loss' ? (tgt ? 1 / 3.2 : 1 / 2) : (tgt ? 1 / 1.2 : 1 / 0.8);
+    level[k] += clamp(tgt - level[k], -speed * dt, speed * dt);
+  }
+  let conn = 1 - level.loss;
+  const parts = [['normal', baseRate(now)], ['ddos', ATTACK_RATE.ddos * level.ddos], ['scan', ATTACK_RATE.scan * level.scan], ['exfil', ATTACK_RATE.exfil * level.exfil]];
+  const partsSum = parts.reduce((a, [, v]) => a + v, 0);
+  const horizon = now + 0.1, slot = 0.005;
+  if (cap) conn = capStep(now, horizon); else curTotal = partsSum * conn;
+  curLambda = Math.min(32, curTotal / cfg.sampling);
+  rateHist.push({t: now, r: curTotal});
+  while (rateHist.length && rateHist[0].t < now - 32) rateHist.shift();
+  while (!cap && scheduledUntil < horizon) {
+    if (rnd() < curLambda * slot) emit(scheduledUntil + rnd() * slot, parts, partsSum);
+    scheduledUntil += slot;
+  }
+  improve(now, dt);
+  if (droneGain) droneGain.gain.setTargetAtTime(soundOn && cfg.drone ? 0.05 * Math.pow(conn, 1.5) : 0, ac.currentTime, 0.25);
+}
+setInterval(tick, 25);
+
+/* ---------------- Drawing ---------------- */
+let colors = {};
+function readTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['calm', 'alarm', 'accent', 'line', 'muted', 'ink', 'panel', 'bg']) colors[k] = cs.getPropertyValue('--' + k).trim();
+}
+readTheme();
+new MutationObserver(readTheme).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme', 'style', 'class']});
+
+function fit(canvas) {
+  const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  const g = canvas.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return {g, w: r.width, h: r.height};
+}
+const rollEl = $('#roll'), rateEl = $('#rate');
+const WIN = 12;
+function drawRoll(now) {
+  const {g, w, h} = fit(rollEl);
+  g.clearRect(0, 0, w, h);
+  const gutter = w < 520 ? 56 : 84, right = 10, nowX = w - right;
+  const pxs = (nowX - gutter) / WIN;
+  const xOf = t => nowX - (now - t) * pxs;
+  const gap = 6, bandH = (h - 22 - gap * 2) / 3;
+  const bands = [['port', 'Port', 'high'], ['dst', 'Dest IP', 'mid'], ['src', 'Source IP', 'low']].map(([f, a, b], i) => ({f, a, b, y: i * (bandH + gap)}));
+
+  // attack shading
+  g.font = '500 11px JetBrains Mono, ui-monospace, monospace';
+  for (const an of annotations) {
+    const s = Math.max(gutter, xOf(an.start)), e = Math.min(nowX, xOf(an.end === null ? now : an.end));
+    if (e <= gutter || e <= s) continue;
+    g.globalAlpha = 0.1; g.fillStyle = colors.alarm; g.fillRect(s, 0, e - s, h - 22);
+    g.globalAlpha = 1; g.fillStyle = colors.alarm;
+    if (e - s > 40) g.fillText(NAMES[an.type], s + 5, h - 26);
+  }
+  // bands
+  g.font = '500 10.5px ' + 'JetBrains Mono, ui-monospace, monospace';
+  for (const b of bands) {
+    g.fillStyle = colors.line;
+    for (let i = 1; i <= 5; i++) g.fillRect(gutter, Math.round(b.y + bandH * i / 6), nowX - gutter, 1);   // each register is a five-line staff
+    g.fillStyle = colors.ink; g.fillText(b.a.toUpperCase(), 8, b.y + 16);
+    g.fillStyle = colors.muted; g.fillText(b.b + ' · ' + noteName(BAND[b.f][0] + 1) + '–' + noteName(BAND[b.f][1] - 2), 8, b.y + 30);
+  }
+  // time grid
+  g.fillStyle = colors.muted;
+  for (let s = 0; s <= WIN; s += 2) {
+    const x = nowX - s * pxs;
+    g.globalAlpha = 0.35; g.fillRect(x, 0, 1, h - 22); g.globalAlpha = 1;
+    const label = s === 0 ? 'now' : '−' + s + ' s';
+    const tw = g.measureText(label).width;
+    g.fillText(label, clamp(x - tw / 2, gutter, w - tw - 2), h - 6);
+  }
+  // notes
+  const bandOf = {}; bands.forEach(b => bandOf[b.f] = b);
+  for (const e of events) {
+    if (e.t < now - WIN - 1) continue;
+    const x = xOf(e.t), wd = Math.max(3, e.dur * pxs);
+    if (x + wd < gutter) continue;
+    for (const n of e.notes) {
+      const b = bandOf[n.field], [lo, hi] = BAND[n.field];
+      const y = b.y + bandH - 6 - ((n.midi - lo) / (hi - lo)) * (bandH - 12);
+      g.fillStyle = n.cons ? colors.calm : colors.alarm;
+      const x0 = Math.max(gutter, x);
+      if (e.inst === 'clarinet') { g.globalAlpha = 0.95; g.fillRect(x0, y - 3, x + wd - x0, 6); }
+      else if (e.inst === 'strings') { g.globalAlpha = 0.6; g.fillRect(x0, y - 2, x + wd - x0, 4); }
+      else { g.globalAlpha = 0.45; g.fillRect(x0, y - 2, x + wd - x0, 4); g.globalAlpha = 1; if (x >= gutter) g.fillRect(x, y - 5, 3, 10); }
+      const age = now - e.t;
+      if (age < 0.2) { g.globalAlpha = 0.35 * (1 - age / 0.2); g.beginPath(); g.arc(nowX, y, 9, 0, Math.PI * 2); g.fill(); }
+    }
+  }
+  g.globalAlpha = 1;
+  g.fillStyle = colors.accent; g.fillRect(nowX, 0, 2, h - 22);
+}
+function drawRate(now) {
+  const {g, w, h} = fit(rateEl);
+  g.clearRect(0, 0, w, h);
+  const left = 44, right = 10, top = 6, bottom = 18, span = 30, step = cap ? cap.step : 5000, ymax = step * 3.2;
+  const xOf = t => w - right - (now - t) / span * (w - right - left);
+  const yOf = r => top + (1 - r / ymax) * (h - top - bottom);
+  g.font = '10.5px JetBrains Mono, ui-monospace, monospace';
+  for (const v of [0, step, 2 * step, 3 * step]) {
+    g.fillStyle = colors.line; g.fillRect(left, Math.round(yOf(v)), w - left - right, 1);
+    g.fillStyle = colors.muted; g.fillText(v < 1000 ? String(v) : (v / 1000) + 'k', 6, yOf(v) + 4);
+  }
+  g.fillText('packets/s · last 30 s', left + 4, h - 4);
+  const pts = rateHist.filter(p => p.t >= now - span);
+  if (pts.length < 2) return;
+  g.beginPath(); g.moveTo(xOf(pts[0].t), yOf(0));
+  for (const p of pts) g.lineTo(xOf(p.t), yOf(p.r));
+  g.lineTo(xOf(pts[pts.length - 1].t), yOf(0)); g.closePath();
+  g.globalAlpha = 0.16; g.fillStyle = colors.accent; g.fill(); g.globalAlpha = 1;
+  g.beginPath();
+  pts.forEach((p, i) => i ? g.lineTo(xOf(p.t), yOf(p.r)) : g.moveTo(xOf(p.t), yOf(p.r)));
+  g.strokeStyle = colors.accent; g.lineWidth = 1.5; g.stroke();
+  const last = pts[pts.length - 1];
+  g.beginPath(); g.arc(xOf(last.t), yOf(last.r), 3.5, 0, Math.PI * 2); g.fillStyle = colors.accent; g.fill();
+}
+
+/* ---------------- Packet log ---------------- */
+const logBody = $('#logBody');
+let logDirty = false;
+function clockLabel(s) { return fmtClock(s) + '.' + String(Math.floor((s % 1) * 100)).padStart(2, '0'); }
+function renderLog() {
+  logBody.innerHTML = logRows.map(p => {
+    const [s, d, pt] = p.notes;
+    const cls = n => n.cons ? '' : ' class="odd"';
+    const notes = p.notes.map(n => `<span${cls(n)}>${noteName(n.midi)}</span>`).join(' ');
+    return `<tr><td>${clockLabel(p.ct === undefined ? p.t - T0 : p.ct)}</td><td>${p.proto}${p.flags === 'SYN' ? ' SYN' : ''}</td><td>${p.dir === 'in' ? 'in · L' : 'out · R'}</td><td${cls(s)}>${p.src}</td><td${cls(d)}>${p.dst}</td><td${cls(pt)}>${p.port || '–'}</td><td>${fmtInt(p.size)}</td><td>${notes}</td></tr>`;
+  }).join('');
+}
+
+/* ---------------- Hotlist render ---------------- */
+function renderHotlist() {
+  const rows = ['<span class="h">Address</span><span class="h">Low</span><span class="h">Mid</span>'];
+  for (const [ip, rank] of hot.ips) rows.push(`<span>${ip}</span><span class="n">${noteName(CONS.src[rank % CONS.src.length])}</span><span class="n">${noteName(CONS.dst[rank % CONS.dst.length])}</span>`);
+  $('#hotIps').innerHTML = rows.join('');
+  $('#hotPorts').innerHTML = [...hot.ports].map(([p, rank]) => `<span class="chip">${p || 'no port'}<span>${noteName(CONS.port[rank % CONS.port.length])}</span></span>`).join('');
+  $('#hotMeta').textContent = `${hot.ips.size} IPs · ${hot.ports.size} ports · ` + (fix.ema ? `${EMA_TAU} s moving average` : `from ${fmtInt(hot.n)} packets`);
+}
+
+/* ---------------- Frame loop ---------------- */
+const tempoWord = n => n < 0.05 ? 'Tacet' : n < 3 ? 'Largo' : n < 6 ? 'Adagio' : n < 10 ? 'Andante' : n < 18 ? 'Allegro' : 'Presto';
+let lastFrame = simNow(), lastDom = 0;
+function frame() {
+  const now = simNow();
+  const dt = now - lastFrame; lastFrame = now;
+  while (pending.length && pending[0].t <= now) {
+    const p = pending.shift();
+    events.push(p); sampledCount++;
+    logRows.unshift(p); if (logRows.length > 16) logRows.pop();
+    logDirty = true;
+    if (p.dir === 'in') meter.l = Math.min(1, meter.l + 0.22); else meter.r = Math.min(1, meter.r + 0.22);
+  }
+  while (events.length && events[0].t < now - WIN - 2) events.shift();
+  const decay = Math.exp(-dt * 2.6); meter.l *= decay; meter.r *= decay;
+  drawRoll(now); drawRate(now);
+  $('#panL').style.width = (meter.l * 100).toFixed(1) + '%';
+  $('#panR').style.width = (meter.r * 100).toFixed(1) + '%';
+  if (now - lastDom > 0.25) {
+    lastDom = now;
+    $('#ro-rate').innerHTML = fmtInt(cap ? curTotal : Math.round(curTotal / 10) * 10) + ' <small>pps</small>';
+    $('#ro-tempo').innerHTML = curLambda.toFixed(1) + ` <small>notes/s</small><em>${tempoWord(curLambda)}</em>`;
+    $('#ro-count').textContent = fmtInt(sampledCount);
+    updateStatePill();
+    if (logDirty) { renderLog(); logDirty = false; }
+    showFixes();
+    if (cap && !cap.live) { const ct = clamp(now - cap.t0, 0, cap.dur); $('#capSeek').value = ct; $('#o-cap').textContent = fmtClock(ct) + ' / ' + fmtClock(cap.dur); }
+  }
+  requestAnimationFrame(frame);
+}
+function updateStatePill() {
+  const el = $('#ro-state');
+  if (cap) {
+    const ct = simNow() - cap.t0, over = ct > cap.dur;
+    if (cap.live) {
+      el.className = cap.lost ? 'pill neutral' : 'pill calm';
+      el.textContent = cap.lost ? 'Live feed lost' : cap.learning ? `Live · learning, ${Math.max(0, Math.ceil(LIVE_LEARN - ct))} s left` : 'Live traffic';
+      return;
+    }
+    el.className = over ? 'pill neutral' : 'pill calm';
+    el.textContent = over ? 'Capture finished' : ct < cap.baseEnd ? 'Capture · baseline' : 'Capture playing';
+    return;
+  }
+  const on = Object.keys(active).filter(k => active[k]);
+  if (!on.length) { el.className = 'pill calm'; el.textContent = 'Normal traffic'; }
+  else { el.className = 'pill alarm'; el.textContent = on.map(k => NAMES[k]).join(' + ') + ' active'; }
+}
+
+/* ---------------- Lab controls ---------------- */
+function syncAttackButtons() {
+  $$('.attack').forEach(b => {
+    const k = b.dataset.attack;
+    b.setAttribute('aria-pressed', String(k === 'combined' ? (active.ddos && active.exfil) : active[k]));
+  });
+}
+$('#attacks').addEventListener('click', e => {
+  const b = e.target.closest('.attack'); if (!b || b.disabled) return;
+  const k = b.dataset.attack;
+  if (k === 'combined') { const on = !(active.ddos && active.exfil); setActive('ddos', on); setActive('exfil', on); }
+  else setActive(k, !active[k]);
+});
+function stopAllAttacks() { for (const k in active) setActive(k, false); }
+$('#stopAll').addEventListener('click', stopAllAttacks);
+function lockLab(on) { $$('.attack').forEach(b => b.disabled = on); $('#stopAll').disabled = $('#shiftBtn').disabled = on; }
+$('#soundBtn').addEventListener('click', () => setSound(!soundOn));
+$('#vol').addEventListener('input', e => { cfg.volume = +e.target.value; if (master) master.gain.setTargetAtTime(cfg.volume, ac.currentTime, 0.05); });
+$('#sampling').addEventListener('input', e => {
+  cfg.sampling = +e.target.value;
+  $('#o-sampling').textContent = `1 in ${fmtInt(cfg.sampling)} · ${(4500 / cfg.sampling).toFixed(1)} notes/s`;
+});
+$('#kip').addEventListener('input', e => { cfg.kIP = +e.target.value; $('#o-kip').textContent = cfg.kIP + ' addresses'; buildHotlist(); });
+$('#noise').addEventListener('input', e => { cfg.noise = +e.target.value; $('#o-noise').textContent = (cfg.noise * 100).toFixed(1) + '%'; });
+$('#drone').addEventListener('change', e => { cfg.drone = e.target.checked; });
+$('#o-sampling').textContent = `1 in 600 · ${(4500 / 600).toFixed(1)} notes/s`;
+
+/* ---------------- Wireshark capture: file parsing ---------------- */
+const ipCache = new Map();
+const intern = s => ipCache.get(s) || (ipCache.set(s, s), s);
+const ip4 = (dv, o) => intern(dv.getUint8(o) + '.' + dv.getUint8(o + 1) + '.' + dv.getUint8(o + 2) + '.' + dv.getUint8(o + 3));
+function ip6(dv, o) {
+  const g = [];
+  for (let i = 0; i < 16; i += 2) g.push(dv.getUint16(o + i).toString(16));
+  let at = -1, len = 0;   // the longest run of zero groups is written as "::"
+  for (let i = 0; i < 8; i++) {
+    let j = i; while (j < 8 && g[j] === '0') j++;
+    if (j - i > len) { at = i; len = j - i; }
+    if (j > i) i = j;
+  }
+  if (len > 1) { g.splice(at, len, ''); if (at === 0) g.unshift(''); if (at + len === 8) g.push(''); }
+  return intern(g.join(':'));
+}
+// One captured frame -> the header fields the sonifier uses, or null if it is not an IP packet.
+function decodeFrame(dv, o, end, size, link) {
+  const start = o;
+  if (link === 1) {                                     // Ethernet, skipping VLAN tags
+    if (o + 14 > end) return null;
+    let type = dv.getUint16(o + 12); o += 14;
+    while ((type === 0x8100 || type === 0x88a8) && o + 4 <= end) { type = dv.getUint16(o + 2); o += 4; }
+    if (type !== 0x0800 && type !== 0x86dd) return null;
+  } else if (link === 0) o += 4;                        // loopback
+  else if (link === 113) o += 16;                       // Linux cooked capture
+  else if (link === 276) o += 20;                       // Linux cooked capture v2
+  else if (link !== 101) return null;                   // 101 is raw IP
+  if (o + 20 > end) return null;
+  const ver = dv.getUint8(o) >> 4;
+  let src, dst, ipProto, l4, payload;
+  if (ver === 4) {
+    const ihl = (dv.getUint8(o) & 15) * 4;
+    src = ip4(dv, o + 12); dst = ip4(dv, o + 16);
+    ipProto = dv.getUint16(o + 6) & 0x1fff ? -1 : dv.getUint8(o + 9);   // later fragments carry no ports
+    l4 = o + ihl;
+    payload = (dv.getUint16(o + 2) || size - (o - start)) - ihl;        // total length is 0 when the sender offloads segmentation
+  } else if (ver === 6 && o + 40 <= end) {
+    src = ip6(dv, o + 8); dst = ip6(dv, o + 24);
+    ipProto = dv.getUint8(o + 6); l4 = o + 40; payload = dv.getUint16(o + 4);
+    while ((ipProto === 0 || ipProto === 43 || ipProto === 44 || ipProto === 60) && l4 + 8 <= end) {   // extension headers
+      const n = ipProto === 44 ? 8 : (dv.getUint8(l4 + 1) + 1) * 8;
+      ipProto = dv.getUint8(l4); l4 += n; payload -= n;
+    }
+  } else return null;
+  let sp = 0, dp = 0, flags = '', proto = ipProto === 1 || ipProto === 58 ? 'ICMP' : 'IP';
+  if (ipProto === 6 && l4 + 14 <= end) {
+    sp = dv.getUint16(l4); dp = dv.getUint16(l4 + 2);
+    if ((dv.getUint8(l4 + 13) & 0x12) === 0x02) flags = 'SYN';
+    payload -= (dv.getUint8(l4 + 12) >> 4) * 4;
+    proto = 'TCP';
+  } else if (ipProto === 17 && l4 + 4 <= end) { sp = dv.getUint16(l4); dp = dv.getUint16(l4 + 2); proto = 'UDP'; }
+  // The service is taken to be the lower-numbered port, so a reply sounds like the request it answers.
+  const port = Math.min(sp, dp);
+  // As in Wireshark's protocol column, a bare TCP segment is TCP; one carrying data on a web or FTP port is HTTP or FTP.
+  if (proto === 'TCP' && payload > 0) proto = protoOf(port);
+  return {src, dst, port, proto, size, flags};
+}
+const INSIDE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|127\.|f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:|::1$)/;
+function parseCapture(buf) {
+  const dv = new DataView(buf), pk = [];
+  const add = (t, o, len, size, link) => {
+    const p = decodeFrame(dv, o, o + len, size, link);
+    if (p) { p.t = t; pk.push(p); }
+  };
+  const magic = dv.getUint32(0);
+  if (magic === 0x0a0d0d0a) {                           // pcapng: a chain of length-prefixed blocks
+    let le = true, ifs = [];
+    for (let o = 0; o + 12 <= buf.byteLength;) {
+      const type = dv.getUint32(o, le);
+      if (type === 0x0a0d0d0a) { le = dv.getUint32(o + 8, true) === 0x1a2b3c4d; ifs = []; }   // a section header sets the byte order
+      const blk = dv.getUint32(o + 4, le);
+      if (blk < 12 || o + blk > buf.byteLength) break;
+      if (type === 1) {                                 // interface description: link type and timestamp unit
+        let unit = 1e-6;
+        for (let q = o + 16; q + 4 <= o + blk - 4;) {
+          const code = dv.getUint16(q, le), n = dv.getUint16(q + 2, le);
+          if (!code) break;
+          if (code === 9) { const r = dv.getUint8(q + 4); unit = r & 128 ? Math.pow(2, -(r & 127)) : Math.pow(10, -r); }
+          q += 4 + ((n + 3) & ~3);
+        }
+        ifs.push({link: dv.getUint16(o + 8, le), unit});
+      } else if (type === 6) {                          // enhanced packet
+        const f = ifs[dv.getUint32(o + 8, le)], len = dv.getUint32(o + 20, le);
+        if (f && 32 + len <= blk) add((dv.getUint32(o + 12, le) * 4294967296 + dv.getUint32(o + 16, le)) * f.unit, o + 28, len, dv.getUint32(o + 24, le), f.link);
+      }
+      o += blk;
+    }
+  } else {                                              // classic pcap: one global header, then records
+    const le = magic === 0xd4c3b2a1 || magic === 0x4d3cb2a1, ns = magic === 0xa1b23c4d || magic === 0x4d3cb2a1;
+    if (!le && !ns && magic !== 0xa1b2c3d4) throw new Error('It is not a pcap or pcapng file.');
+    const link = dv.getUint32(20, le) & 0xffff, unit = ns ? 1e-9 : 1e-6;
+    for (let o = 24; o + 16 <= buf.byteLength;) {
+      const len = dv.getUint32(o + 8, le);
+      if (o + 16 + len > buf.byteLength) break;
+      add(dv.getUint32(o, le) + dv.getUint32(o + 4, le) * unit, o + 16, len, dv.getUint32(o + 12, le), link);
+      o += 16 + len;
+    }
+  }
+  pk.sort((a, b) => a.t - b.t);
+  if (pk.length < 2 || pk[pk.length - 1].t === pk[0].t) throw new Error('No IP packets could be read from it.');
+  const t0 = pk[0].t, seen = new Map();
+  for (const p of pk) { p.t -= t0; seen.set(p.src, (seen.get(p.src) || 0) + 1); seen.set(p.dst, (seen.get(p.dst) || 0) + 1); }
+  // Direction: private-range addresses are inside. When both ends are on the same side, the busiest address is taken to be the capturing host.
+  const busiest = v6 => { let best; for (const e of seen) if (e[0].includes(':') === v6 && (!best || e[1] > best[1])) best = e; return best && best[0]; };
+  const home = [busiest(false), busiest(true)];
+  let peak = 0, lo = 0;
+  pk.forEach((p, j) => {
+    const a = INSIDE.test(p.src), b = INSIDE.test(p.dst);
+    p.dir = a !== b ? (a ? 'out' : 'in') : home.includes(p.src) ? 'out' : 'in';
+    while (pk[lo].t <= p.t - 1) lo++;
+    peak = Math.max(peak, j - lo + 1);                  // busiest one-second window, for the rate chart
+  });
+  return {pk, dur: pk[pk.length - 1].t, peak};
+}
+
+/* ---------------- Wireshark capture: playback ---------------- */
+const CAP_HINT = $('#capHint').textContent;
+function capIndex(t) { let a = 0, b = cap.pk.length; while (a < b) { const m = (a + b) >> 1; if (cap.pk[m].t < t) a = m + 1; else b = m; } return a; }
+function clearView() { pending.length = events.length = logRows.length = rateHist.length = recent.length = 0; flows.clear(); logDirty = true; }
+function seekCapture(s) {
+  cap.t0 = simNow() - s + 0.05;
+  cap.i = cap.hi = capIndex(s); cap.lo = capIndex(s - 1);
+  if (fix.ema) buildHotlist();   // a jump restarts the moving average from the baseline
+  clearView();
+}
+// Called from tick(): plays the capture in pseudo real time. Returns 1 while traffic is flowing and 0 once it has stopped.
+function capStep(now, horizon) {
+  const pk = cap.pk, ct = now - cap.t0;
+  while (cap.hi < pk.length && pk[cap.hi].t <= ct) cap.hi++;
+  while (cap.lo < cap.hi && pk[cap.lo].t <= ct - 1) cap.lo++;
+  curTotal = cap.hi - cap.lo;                           // packets in the last second
+  if (cap.i < cap.hi) cap.i = cap.hi;                   // after a stall, skip what is already in the past
+  let end = cap.i; while (end < pk.length && pk[end].t < horizon - cap.t0) end++;
+  // Sample 1 in N but never above 32 notes/s, judged on the rate now arriving so the front of a burst is capped too.
+  const prob = Math.min(1 / cfg.sampling, 32 / Math.max(curTotal, (end - cap.hi) * 10, 1));
+  for (; cap.i < end; cap.i++) if (rnd() < prob) play(Object.assign({ct: pk[cap.i].t}, pk[cap.i]), cap.t0 + pk[cap.i].t);
+  cap.gap = ct - (cap.hi ? pk[cap.hi - 1].t : 0);       // how long the line has been silent
+  return ct > cap.dur || cap.gap > 4 ? 0 : 1;
+}
+function rateScale(peak) {                              // rate chart gridline spacing: a round number that keeps the peak on the chart
+  const third = Math.max(1, peak / 3), mag = Math.pow(10, Math.floor(Math.log10(third)));
+  cap.step = (third <= mag ? 1 : third <= 2 * mag ? 2 : third <= 5 * mag ? 5 : 10) * mag;
+}
+async function openCapture(file) {
+  let c;
+  try { c = parseCapture(await file.arrayBuffer()); }
+  catch (e) { $('#capHint').textContent = `Could not open ${file.name}. ${e instanceof RangeError ? 'It is not a pcap or pcapng file.' : e.message}`; return; }
+  stopAllAttacks(); lockLab(true); closeFeed();
+  cap = c;
+  // As in the study, the first 30 s (the first third of a short capture) are the normal traffic that builds the hotlist.
+  cap.baseEnd = Math.min(30, cap.dur / 3);
+  const n = capIndex(cap.baseEnd);
+  learnBaseline(cap.pk.slice(0, n)); buildHotlist();
+  cap.baseRate = n / cap.baseEnd;
+  cfg.sampling = Math.max(1, Math.round(cap.baseRate / 7.5));   // the baseline rate plays at the simulation's 7.5 notes/s
+  rateScale(cap.peak);
+  sampledCount = 0;
+  seekCapture(0);
+  $('#capHint').textContent = `${file.name} · ${fmtInt(cap.pk.length)} IP packets · ${fmtClock(cap.dur)}. The first ${+cap.baseEnd.toFixed(cap.baseEnd < 10 ? 1 : 0)} s are treated as normal traffic and build the hotlist.`;
+  $('#capSeek').max = cap.dur;
+  $('#capRestart').hidden = $('#capClose').hidden = $('#capPos').hidden = false;
+  $('#sampling').disabled = $('#noise').disabled = true;
+  $('#o-sampling').textContent = `1 in ${fmtInt(cfg.sampling)} · set from the capture`;
+}
+function closeCapture() {
+  if (!cap) return;
+  closeFeed();
+  cap = null; sampledCount = 0; clearView();
+  setShift(false);
+  $('#capHint').textContent = CAP_HINT;
+  $('#capRestart').hidden = $('#capClose').hidden = $('#capPos').hidden = true;
+  $('#sampling').disabled = $('#noise').disabled = false;
+  $('#sampling').dispatchEvent(new Event('input'));     // restores cfg.sampling and its label
+  learnBaseline(); buildHotlist(); lockLab(false);
+}
+$('#capOpen').addEventListener('click', () => $('#capFile').click());
+$('#capFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) openCapture(f); });
+$('#capRestart').addEventListener('click', () => cap.live ? startLive() : seekCapture(0));
+$('#capClose').addEventListener('click', closeCapture);
+$('#capSeek').addEventListener('input', e => seekCapture(+e.target.value));
+
+/* ---------------- Live traffic ---------------- */
+// live_capture.py reads this computer's packets and streams their headers to the page it serves. A live source is a
+// capture that keeps growing: capStep() plays it, and its first LIVE_LEARN seconds are the baseline.
+const LIVE_LEARN = 30, LIVE_LAG = 0.3;
+let feed = null;
+function closeFeed() { if (feed) { feed.close(); feed = null; } }
+function openLive() {
+  closeFeed();
+  feed = new EventSource('/live');
+  feed.onopen = () => { if (cap && cap.live) cap.lost = false; else startLive(); };
+  feed.onmessage = e => liveStep(JSON.parse(e.data));
+  feed.onerror = () => {
+    if (cap && cap.live) cap.lost = true;               // the browser keeps trying to reconnect
+    else { closeFeed(); $('#capHint').textContent = 'There is no live feed here. Run live_capture.py from this folder: it opens this page with live traffic.'; }
+  };
+}
+function startLive() {
+  stopAllAttacks(); lockLab(true);
+  cap = {live: true, learning: true, pk: [], dur: Infinity, off: NaN, step: 1};
+  cfg.sampling = Infinity;                              // nothing plays until the baseline has been learned
+  learnBaseline([]); buildHotlist();
+  sampledCount = 0;
+  seekCapture(0);
+  $('#capHint').textContent = `Live traffic from this computer. The first ${LIVE_LEARN} s are being learned as normal traffic, and nothing plays until then.`;
+  $('#capRestart').hidden = $('#capClose').hidden = false;
+  $('#capPos').hidden = true;
+  $('#sampling').disabled = $('#noise').disabled = true;
+  $('#o-sampling').textContent = 'set from live traffic';
+}
+// Called for every batch from live_capture.py, 20 times a second whether or not it holds packets.
+function liveStep(batch) {
+  if (!cap || !cap.live) return;
+  const ct = simNow() - cap.t0, pk = cap.pk;
+  for (const [t, out, size, head] of batch) {
+    const bytes = Uint8Array.from(atob(head), c => c.charCodeAt(0));
+    const p = decodeFrame(new DataView(bytes.buffer), 0, bytes.length, size, 101);
+    if (!p) continue;
+    // Line the helper's clock up with the page's, a little behind so that notes can be scheduled ahead. Done for
+    // the first packet (the offset starts as NaN) and again if the two clocks ever part by 2 s, as after a sleep.
+    if (!(Math.abs(t - cap.off - ct) < 2)) cap.off = t - ct - LIVE_LAG;
+    p.t = Math.max(t - cap.off, pk.length ? pk[pk.length - 1].t : 0);
+    p.dir = out ? 'out' : 'in';
+    pk.push(p);
+  }
+  rateScale(rateHist.reduce((m, r) => Math.max(m, r.r), 0));
+  if (cap.learning && ct >= LIVE_LEARN) liveLearned();
+  const n = cap.lo - 1;                                 // packets already played are dropped, so a long session stays small
+  if (!cap.learning && n > 5000) { pk.splice(0, n); cap.i -= n; cap.hi -= n; cap.lo -= n; }
+}
+function liveLearned() {
+  const base = cap.pk.slice(0, capIndex(LIVE_LEARN));
+  learnBaseline(base); buildHotlist();
+  cap.learning = false;
+  cap.baseRate = base.length / LIVE_LEARN;
+  cfg.sampling = Math.max(1, Math.round(cap.baseRate / 7.5));   // as for a capture file
+  // One computer's traffic comes in bursts, so an outage is judged by silence and not by rate: the link counts as
+  // down once it has been silent for twice the longest silence in the baseline, and for at least 2 s.
+  let silence = 0, last = 0;
+  for (const p of base) { silence = Math.max(silence, p.t - last); last = p.t; }
+  cap.quiet = Math.max(2, 2 * Math.max(silence, LIVE_LEARN - last));
+  $('#capHint').textContent = `Live traffic from this computer. The hotlist was built from the first ${LIVE_LEARN} s, ${fmtInt(base.length)} packets. Restart learns it again.`;
+  $('#o-sampling').textContent = `1 in ${fmtInt(cfg.sampling)} · set from live traffic`;
+}
+$('#liveOpen').addEventListener('click', openLive);
+
+/* ---------------- Resolved flaws: the improved design ---------------- */
+// Five optional fixes for weaknesses of the paper's design. All are off by default, and with all five off the sound is the paper's.
+const fix = {timbre: false, ftp: false, heart: false, ema: false, calm: false};
+const fixCount = () => Object.values(fix).filter(Boolean).length;
+const FLOW_TAU = 3, EMA_TAU = 45, EMA_PROBATION = 30, EMA_GAP = 10;
+const recent = [];                 // sampled packets from the last 2 s
+const flows = new Map();           // FTP flow -> decaying packet count
+const score = {ddos: 0, scan: 0, ftp: 0, link: 1, any: 0, open: false, until: 0};
+const ema = {ip: new Map(), port: new Map(), base: new Set(), known: new Set(), last: 0};
+let calmLP = null, calmGain = null, flatGain = null, nextBeat = 0, nextDrum = 0, nextHonk = 0;
+
+// Every sampled packet passes through here. It feeds the anomaly scores and returns the FTP flow gain.
+function watch(p, te) {
+  const [s, d, pt] = p.notes;
+  p.newPort = !pt.cons && !recent.some(r => r.scan && r.port === p.port);   // an unusual port not heard in the last 2 s
+  // A flood source is an unknown address opening a connection (a SYN). Replies to connections this side opened do not count.
+  recent.push({t: te, src: p.src, port: p.port, flood: !s.cons && p.dir === 'in' && p.flags === 'SYN', scan: !pt.cons, odd: !(s.cons && d.cons && pt.cons)});
+  if (fix.ema) { emaBump(ema.ip, p.src, te); emaBump(ema.ip, p.dst, te); emaBump(ema.port, p.port, te); }
+  if (p.proto !== 'FTP') return 1;
+  const key = p.src + '>' + p.dst, f = flows.get(key) || {n: 0, t: te};
+  f.n = Math.min(8, f.n * Math.exp(-(te - f.t) / FLOW_TAU) + 1); f.t = te;   // capped, so the horn stops within 3 s of a transfer ending however dense it was
+  flows.set(key, f);
+  return clamp(0.3 + 0.28 * (f.n - 1), 0.3, 1.7);    // a lone packet plays at 30% level, a dense flow at up to 170%
+}
+
+// Called from tick(): updates the scores and drives the sounds that depend on them.
+function improve(now, dt) {
+  while (recent.length && recent[0].t < now - 2) recent.shift();
+  const srcs = new Set(), ports = new Set();
+  let odd = 0, dens = 0;
+  for (const r of recent) { if (r.flood) srcs.add(r.src); if (r.scan) ports.add(r.port); if (r.odd) odd++; }
+  for (const [k, f] of flows) { const n = f.n * Math.exp(-(now - f.t) / FLOW_TAU); if (n < 0.05) flows.delete(k); else dens = Math.max(dens, n); }
+  // A capture that has finished is not an outage, and nor is a live feed that is still learning or has been cut off.
+  const over = !!cap && (cap.learning || cap.lost || now - cap.t0 > cap.dur);
+  const link = over ? 1 : cap && cap.live ? clamp(2 - 2 * cap.gap / cap.quiet, 0, 1) : clamp(curTotal / (cap ? cap.baseRate : 4500), 0, 1);
+  score.link += (link - score.link) * Math.min(1, dt / 0.4);
+  score.ddos = clamp((srcs.size - 5) / 7, 0, 1);      // many different new sources at once
+  score.scan = clamp((ports.size - 1) / 5, 0, 1);     // many different unusual ports at once
+  score.ftp = clamp((dens - 2) / 4, 0, 1);
+  // One computer's own traffic keeps moving on to addresses its 30 s baseline never saw, so on a live source the
+  // share of unusual packets says little about attacks and is left out of the score.
+  const share = recent.length >= 6 && !(cap && cap.live) ? odd / recent.length : 0;
+  score.any = Math.max(score.ddos, score.scan, score.ftp, clamp((0.6 - score.link) / 0.35, 0, 1), clamp((share - 0.12) / 0.2, 0, 1));
+  const was = score.open;
+  if (score.any > 0.4) score.open = true;
+  if (score.any > 0.25) score.until = now + 1.5; else if (now > score.until) score.open = false;   // stays open until it has been quiet for 1.5 s
+  if (fix.ema && now - ema.last > 1) emaRebuild(now);
+  if (!ac) return;
+  const t = ac.currentTime, live = soundOn && !over, down = score.link < 0.3;
+  calmLP.frequency.setTargetAtTime(score.open ? 16000 : 1100, t, score.open ? 0.05 : 0.5);
+  calmGain.gain.setTargetAtTime(score.open ? 1.25 : 0.5, t, score.open ? 0.05 : 0.5);
+  flatGain.gain.setTargetAtTime(live && fix.heart && down ? 0.13 : 0, t, 0.1);
+  if (!live) return;
+  if (fix.calm && score.open && !was) bell(t + 0.02);
+  // Each repeating signature keeps its own clock and is scheduled a little ahead, like the notes.
+  if (fix.heart && !down) { if (nextBeat < t) nextBeat = t + 0.05; while (nextBeat < t + 0.2) { beat(nextBeat); nextBeat += 1; } }
+  if (fix.timbre && score.ddos > 0.3) { if (nextDrum < t) nextDrum = t + 0.03; while (nextDrum < t + 0.2) { drum(nextDrum); nextDrum += 0.3 - 0.1 * score.ddos; } }
+  if (fix.ftp && score.ftp > 0.25) { if (nextHonk < t) nextHonk = t + 0.03; while (nextHonk < t + 0.2) { honk(nextHonk); nextHonk += 1.1; } }
+}
+
+function initFixAudio() {
+  // Adaptive filtering: with that fix on, notes go through a low-pass and gain that stay closed until the anomaly score opens them.
+  calmLP = ac.createBiquadFilter(); calmLP.type = 'lowpass'; calmLP.frequency.value = 1100;
+  calmGain = ac.createGain(); calmGain.gain.value = 0.5;
+  calmLP.connect(calmGain).connect(master);
+  // Outage: a flatline tone that runs all the time and is only let through while the link is down.
+  const flat = ac.createOscillator(); flat.frequency.value = 880;
+  flatGain = ac.createGain(); flatGain.gain.value = 0;
+  flat.connect(flatGain).connect(master); flat.start();
+}
+// The signature sounds. Each is meant to be named at once: a drum, a knock, a horn, a heartbeat, a bell, a chime.
+function blip(t, type, f0, f1, peak, len, pan) {     // one short sound: an oscillator with a pitch glide, a fast attack and a decay
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + len * 0.5);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0005, t + len);
+  let out = g;
+  if (pan && ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = pan; g.connect(p); out = p; }
+  o.connect(g); out.connect(master);
+  o.start(t); o.stop(t + len + 0.03);
+  o.onended = () => { try { out.disconnect(); } catch (e) {} };
+}
+const drum = t => { blip(t, 'triangle', 190, 60, 0.75, 0.42, -0.5); blip(t, 'triangle', 420, 150, 0.3, 0.12, -0.5); };   // DDoS: a pounding low drum on the incoming side
+const knock = (t, pan) => { blip(t, 'sine', 820, 780, 0.17, 0.07, pan); blip(t, 'sine', 1260, 1200, 0.08, 0.05, pan); };   // port scan: a knock on a door
+const beat = t => { blip(t, 'triangle', 131, 98, 0.1, 0.16); blip(t + 0.2, 'triangle', 98, 78, 0.07, 0.2); };            // the heartbeat: lub-dub
+const bell = t => { blip(t, 'sine', 784, 784, 0.2, 1.5); blip(t, 'sine', 1976, 1976, 0.07, 0.9); };                      // the adaptive filter opening
+const chime = t => [1047, 1319, 1568].forEach((f, i) => blip(t + i * 0.09, 'sine', f, f, 0.12, 0.3));                    // the hotlist learning a value
+function honk(t) {                                   // exfiltration: a two-tone car horn on the outgoing side
+  const g = ac.createGain(), lp = ac.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 2600;
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.2, t + 0.02); g.gain.setValueAtTime(0.2, t + 0.3); g.gain.linearRampToValueAtTime(0, t + 0.36);
+  let out = g;
+  if (ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = 0.6; g.connect(p); out = p; }
+  lp.connect(g); out.connect(master);
+  for (const f of [400, 500]) {
+    const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f;
+    o.connect(lp); o.start(t); o.stop(t + 0.4);
+    if (f === 500) o.onended = () => { try { out.disconnect(); } catch (e) {} };
+  }
+}
+
+// Moving-average hotlists: every value carries a weight that decays with a 45 s time constant.
+function emaBump(m, v, t) {
+  let e = m.get(v);
+  if (!e) m.set(v, e = {w: 0, t, first: t});
+  else if (t - e.t > EMA_GAP) e.first = t;              // a value that went away for 10 s starts its probation again
+  e.w =e.w * Math.exp(-(t - e.t) / EMA_TAU) + 1; e.t = t;
+}
+function seedEma() {                // start from the static baseline, whose values are already trusted
+  const now = simNow(), scale = 7.5 * EMA_TAU / hot.n;   // the weight the baseline would have built up at 7.5 notes/s
+  for (const [m, counts] of [[ema.ip, hot.ipCounts], [ema.port, hot.portCounts]]) {
+    m.clear();
+    for (const [v, c] of counts) m.set(v, {w: c * scale, t: now, first: -Infinity});
+  }
+  ema.base = new Set(hot.ips.keys()); ema.known = new Set(); ema.last = now;
+}
+function emaRebuild(now) {
+  ema.last = now;
+  let learned = false;
+  for (const [m, list, k] of [[ema.ip, hot.ips, cfg.kIP], [ema.port, hot.ports, cfg.kPort]]) {
+    const ranked = [];
+    for (const [v, e] of m) {
+      const w = e.w * Math.exp(-(now - e.t) / EMA_TAU);
+      if (w < 0.05) m.delete(v);
+      // A newcomer must have been seen steadily through its probation and still be here. Members get a margin, so the edge of the list does not flicker.
+      else if (list.has(v) || (now - e.first >= EMA_PROBATION && now - e.t < EMA_GAP)) ranked.push([v, w * (list.has(v) ? 1.25 : 1)]);
+    }
+    const want = ranked.sort((a, b) => b[1] - a[1]).slice(0, k).map(e => e[0]);
+    // A value that stays keeps its note; a newcomer takes a note that was freed.
+    for (const v of [...list.keys()]) if (!want.includes(v)) list.delete(v);
+    const used = new Set(list.values());
+    let slot = 0;
+    for (const v of want) if (!list.has(v)) {
+      while (used.has(slot)) slot++;
+      used.add(slot); list.set(v, slot);
+      if (list === hot.ips && !ema.base.has(v) && !ema.known.has(v)) { ema.known.add(v); learned = true; }
+    }
+  }
+  if (learned && ac && soundOn) chime(ac.currentTime + 0.05);   // an address that was never in the baseline has just been learned
+  renderHotlist();
+}
+
+function setFix(name, on) {
+  fix[name] = on;
+  if (name === 'ema') { if (on) seedEma(); else buildHotlist(); }
+  $$('[data-fix]').forEach(c => { c.checked = fix[c.dataset.fix]; c.closest('.fix').classList.toggle('on', c.checked); });
+  const n = fixCount();
+  $('#fixAll').setAttribute('aria-pressed', String(n === 5));
+  $('#fixAll').textContent = n === 5 ? "Back to the paper's design" : 'Switch on all five fixes';
+  $('#fixState').textContent = n ? `Improved design: ${n} of 5 fixes on.` : "The paper's original design is playing.";
+  renderHotlist();
+}
+function setShift(on) {
+  shifted = on;
+  $('#shiftBtn').setAttribute('aria-pressed', String(on));
+  $('#shiftBtn').textContent = on ? 'Undo the traffic shift' : 'Shift normal traffic';
+}
+function showFixes() {
+  const bar = (id, v, alert) => { const el = $(id); el.style.width = (v * 100).toFixed(0) + '%'; el.classList.toggle('alert', alert); };
+  bar('#lv-ddos', score.ddos, score.ddos > 0.4); bar('#lv-scan', score.scan, score.scan > 0.4);
+  bar('#lv-ftp', score.ftp, score.ftp > 0.4); bar('#lv-link', score.link, score.link < 0.3);
+  bar('#lv-any', score.any, score.open);
+  $('#lv-calm').textContent = !fix.calm ? 'Filter not in use' : score.open ? 'Filter open, level raised' : 'Filter closed, level lowered';
+  $('#lv-ema').textContent = fix.ema ? `${[...hot.ips.keys()].filter(v => !ema.base.has(v)).length} of ${hot.ips.size} addresses learned since the baseline` : 'Hotlist fixed since the baseline';
+}
+$('#fixes').addEventListener('change', e => { const c = e.target.closest('[data-fix]'); if (c) setFix(c.dataset.fix, c.checked); });
+$('#fixAll').addEventListener('click', () => { const on = fixCount() < 5; for (const k in fix) if (fix[k] !== on) setFix(k, on); });
+$('#shiftBtn').addEventListener('click', () => setShift(!shifted));
+
+/* ---------------- Boot ---------------- */
+learnBaseline();
+buildHotlist();
+// Pre-roll a few seconds of silent traffic so the score opens in a working state.
+(function preroll() {
+  const now = simNow();
+  for (let t = now - WIN; t < now; t += 0.005) {
+    const parts = [['normal', baseRate(t)]];
+    const lam = parts[0][1] / cfg.sampling;
+    if (rnd() < lam * 0.005) emit(t, parts, parts[0][1]);
+    rateHist.push({t, r: parts[0][1]});
+  }
+  scheduledUntil = now;
+})();
+if (location.hash === '#live') openLive();   // the address live_capture.py opens
+requestAnimationFrame(frame);
+})();
+</script>
+
+</html>
