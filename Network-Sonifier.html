@@ -411,6 +411,9 @@ function buildHotlist() {
   const top = (m, k) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, k);
   hot.ips = new Map(top(hot.ipCounts, cfg.kIP).map(([ip], i) => [ip, i]));
   hot.ports = new Map(top(hot.portCounts, cfg.kPort).map(([p], i) => [p, i]));
+  // The share of baseline packets that already carry a value outside these lists. The anomaly score counts from there.
+  const kept = (counts, list) => { let all = 0, held = 0; for (const [v, c] of counts) { all += c; if (list.has(v)) held += c; } return all ? held / all : 1; };
+  hot.odd = 1 - kept(hot.ipCounts, hot.ips) ** 2 * kept(hot.portCounts, hot.ports);
   if (fix.ema) seedEma();
   renderHotlist();
 }
@@ -1061,7 +1064,7 @@ function improve(now, dt) {
   // One computer's own traffic keeps moving on to addresses its 30 s baseline never saw, so on a live source the
   // share of unusual packets says little about attacks and is left out of the score.
   const share = recent.length >= 6 && !(cap && cap.live) ? odd / recent.length : 0;
-  score.any = Math.max(score.ddos, score.scan, score.ftp, clamp((0.6 - score.link) / 0.35, 0, 1), clamp((share - 0.12) / 0.2, 0, 1));
+  score.any = Math.max(score.ddos, score.scan, score.ftp, clamp((0.6 - score.link) / 0.35, 0, 1), clamp((share - hot.odd - 0.2) / 0.2, 0, 1));
   const was = score.open;
   if (score.any > 0.4) score.open = true;
   if (score.any > 0.25) score.until = now + 1.5; else if (now > score.until) score.open = false;   // stays open until it has been quiet for 1.5 s
@@ -1132,7 +1135,7 @@ function seedEma() {                // start from the static baseline, whose val
     m.clear();
     for (const [v, c] of counts) m.set(v, {w: c * scale, t: now, first: -Infinity});
   }
-  ema.base = new Set(hot.ips.keys()); ema.known = new Set(); ema.last = now;
+  ema.base = new Set(hot.ipCounts.keys()); ema.known = new Set(); ema.last = now;   // every address the baseline saw, listed or not
 }
 function emaRebuild(now) {
   ema.last = now;
